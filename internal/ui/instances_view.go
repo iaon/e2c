@@ -193,8 +193,64 @@ func (v *InstancesView) GetSelectedInstance() *model.Instance {
 	return &v.instances[v.selected]
 }
 
+// UpdateProtection updates the cached protection values for an instance and refreshes visible cells.
+func (v *InstancesView) UpdateProtection(instanceID string, terminationProtection, stopProtection bool) {
+	v.instancesM.Lock()
+	defer v.instancesM.Unlock()
+
+	var rowIndex int
+	found := false
+	for idx, inst := range v.instances {
+		if inst.ID == instanceID {
+			v.instances[idx].TerminationProtection = terminationProtection
+			v.instances[idx].StopProtection = stopProtection
+			rowIndex = idx + 1
+			found = true
+			break
+		}
+	}
+
+	if !found || !v.showProtections {
+		return
+	}
+
+	terminationText := "Off"
+	if terminationProtection {
+		terminationText = "On"
+	}
+	v.table.SetCell(rowIndex, 8,
+		tview.NewTableCell(" "+terminationText+" ").
+			SetTextColor(v.textColor).
+			SetAlign(tview.AlignCenter))
+
+	stopText := "Off"
+	if stopProtection {
+		stopText = "On"
+	}
+	v.table.SetCell(rowIndex, 9,
+		tview.NewTableCell(" "+stopText+" ").
+			SetTextColor(v.textColor).
+			SetAlign(tview.AlignCenter))
+}
+
 // ShowInstanceDetails displays a detailed view of an instance
 func (v *InstancesView) ShowInstanceDetails(instance model.Instance) {
+	inst := instance
+
+	if term, stop, ok := v.ui.ec2Client.GetCachedProtectionStatus(inst.ID); ok {
+		inst.TerminationProtection = term
+		inst.StopProtection = stop
+	} else {
+		termProtect, stopProtect, err := v.ui.ec2Client.RefreshProtectionStatus(v.ui.ctx, inst.ID)
+		if err != nil {
+			v.ui.statusBar.SetError(fmt.Sprintf("Failed to load protections: %v", err))
+		} else {
+			inst.TerminationProtection = termProtect
+			inst.StopProtection = stopProtect
+			v.UpdateProtection(inst.ID, termProtect, stopProtect)
+		}
+	}
+
 	detailsText := tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignLeft).
@@ -218,27 +274,27 @@ func (v *InstancesView) ShowInstanceDetails(instance model.Instance) {
   [blue]T.Protect:[white]     %s
   [blue]S.Protect:[white]     %s
 `,
-		instance.ID,
-		instance.Name,
-		instance.Type,
-		getStateEmoji(instance.State), instance.State,
-		instance.Region,
-		instance.LaunchTime.Format("2006-01-02 15:04:05"),
-		formatDuration(instance.Age),
-		instance.PrivateIP,
-		instance.PublicIP,
-		instance.Platform,
-		instance.Architecture,
-		formatProtectionStatus(instance.TerminationProtection),
-		formatProtectionStatus(instance.StopProtection),
+		inst.ID,
+		inst.Name,
+		inst.Type,
+		getStateEmoji(inst.State), inst.State,
+		inst.Region,
+		inst.LaunchTime.Format("2006-01-02 15:04:05"),
+		formatDuration(inst.Age),
+		inst.PrivateIP,
+		inst.PublicIP,
+		inst.Platform,
+		inst.Architecture,
+		formatProtectionStatus(inst.TerminationProtection),
+		formatProtectionStatus(inst.StopProtection),
 	)
 
 	// Format tags section with a more prominent header
 	tagsSection := "\n[::b][yellow]AWS Tags[white][::-]\n"
-	if len(instance.Tags) > 0 {
+	if len(inst.Tags) > 0 {
 		// Sort tags by key for consistent display
-		keys := make([]string, 0, len(instance.Tags))
-		for k := range instance.Tags {
+		keys := make([]string, 0, len(inst.Tags))
+		for k := range inst.Tags {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
@@ -252,7 +308,7 @@ func (v *InstancesView) ShowInstanceDetails(instance model.Instance) {
 		}
 
 		for _, key := range keys {
-			value := instance.Tags[key]
+			value := inst.Tags[key]
 
 			// Categorize tags
 			switch strings.ToLower(key) {

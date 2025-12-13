@@ -27,6 +27,13 @@ type Instance struct {
 	StopProtection        bool // Whether stop protection is enabled
 }
 
+// ProtectionStatus represents the protection attributes of an instance.
+type ProtectionStatus struct {
+	InstanceID            string
+	TerminationProtection bool
+	StopProtection        bool
+}
+
 // GetSSHCommand returns an SSH command for connecting to the instance
 func (i *Instance) GetSSHCommand(username string) string {
 	ip := i.PublicIP

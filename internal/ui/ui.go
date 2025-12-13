@@ -205,7 +205,7 @@ func (ui *UI) RefreshInstances() {
 	ui.statusBar.SetStatus("Refreshing instances...")
 
 	go func() {
-		instances, err := ui.ec2Client.ListInstances(ui.ctx)
+		instances, err := ui.ec2Client.ListInstances(ui.ctx, ui.config.UI.ExpertMode)
 		if err != nil {
 			ui.log.Error("Failed to list instances", "error", err)
 			ui.statusBar.SetError(fmt.Sprintf("Error: %v", err))
@@ -233,6 +233,32 @@ func (ui *UI) RefreshInstances() {
 			ui.statusBar.SetRegion(ui.ec2Client.GetRegion())
 			ui.statusBar.SetStatus(fmt.Sprintf("Found %d instances", len(filteredInstances)))
 		})
+
+		if ui.config.UI.ExpertMode {
+			ui.fetchProtectionsInBackground(filteredInstances)
+		}
+	}()
+}
+
+func (ui *UI) fetchProtectionsInBackground(instances []model.Instance) {
+	idsToFetch := make([]string, 0, len(instances))
+	for _, inst := range instances {
+		if _, _, ok := ui.ec2Client.GetCachedProtectionStatus(inst.ID); ok {
+			continue
+		}
+		idsToFetch = append(idsToFetch, inst.ID)
+	}
+
+	if len(idsToFetch) == 0 {
+		return
+	}
+
+	go func() {
+		for status := range ui.ec2Client.FetchProtectionStatuses(ui.ctx, idsToFetch, 5) {
+			ui.app.QueueUpdateDraw(func() {
+				ui.instancesView.UpdateProtection(status.InstanceID, status.TerminationProtection, status.StopProtection)
+			})
+		}
 	}()
 }
 
@@ -622,9 +648,17 @@ func (ui *UI) handleToggleTerminationProtection() {
 			return
 		}
 
+		term, stop, err := ui.ec2Client.RefreshProtectionStatus(ui.ctx, selectedInstance.ID)
+		if err != nil {
+			ui.app.QueueUpdateDraw(func() {
+				ui.statusBar.SetError(fmt.Sprintf("Failed to reload protections: %v", err))
+			})
+			return
+		}
+
 		ui.app.QueueUpdateDraw(func() {
 			ui.statusBar.SetStatus(fmt.Sprintf("Termination protection %s for %s", protectionStatusText(targetState), selectedInstance.ID))
-			ui.RefreshInstances()
+			ui.instancesView.UpdateProtection(selectedInstance.ID, term, stop)
 		})
 	}()
 }
@@ -655,9 +689,17 @@ func (ui *UI) handleToggleStopProtection() {
 			return
 		}
 
+		term, stop, err := ui.ec2Client.RefreshProtectionStatus(ui.ctx, selectedInstance.ID)
+		if err != nil {
+			ui.app.QueueUpdateDraw(func() {
+				ui.statusBar.SetError(fmt.Sprintf("Failed to reload protections: %v", err))
+			})
+			return
+		}
+
 		ui.app.QueueUpdateDraw(func() {
 			ui.statusBar.SetStatus(fmt.Sprintf("Stop protection %s for %s", protectionStatusText(targetState), selectedInstance.ID))
-			ui.RefreshInstances()
+			ui.instancesView.UpdateProtection(selectedInstance.ID, term, stop)
 		})
 	}()
 }

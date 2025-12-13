@@ -21,11 +21,18 @@ import (
 
 // EC2Client handles interactions with AWS EC2 API
 type EC2Client struct {
-	client     *ec2.Client
-	log        *slog.Logger
-	region     string
-	instancesM sync.Mutex
-	instances  []model.Instance
+	client       *ec2.Client
+	log          *slog.Logger
+	region       string
+	instancesM   sync.Mutex
+	instances    []model.Instance
+	protectionsM sync.RWMutex
+	protections  map[string]protectionStatus
+}
+
+type protectionStatus struct {
+	termination bool
+	stop        bool
 }
 
 // GetRegion returns the current AWS region
@@ -67,14 +74,16 @@ func NewEC2Client(log *slog.Logger, region, profile string) (*EC2Client, error) 
 	client := ec2.NewFromConfig(cfg)
 
 	return &EC2Client{
-		client: client,
-		log:    log,
-		region: region,
+		client:      client,
+		log:         log,
+		region:      region,
+		protections: map[string]protectionStatus{},
 	}, nil
 }
 
-// ListInstances retrieves all EC2 instances in the region
-func (c *EC2Client) ListInstances(ctx context.Context) ([]model.Instance, error) {
+// ListInstances retrieves all EC2 instances in the region. If useCachedProtections is true,
+// cached protection statuses will be included when available without triggering fresh reads.
+func (c *EC2Client) ListInstances(ctx context.Context, useCachedProtections bool) ([]model.Instance, error) {
 	c.log.Info("Listing EC2 instances")
 
 	input := &ec2.DescribeInstancesInput{}
@@ -84,51 +93,16 @@ func (c *EC2Client) ListInstances(ctx context.Context) ([]model.Instance, error)
 	}
 
 	instances := make([]model.Instance, 0)
-	protections := make(map[string]struct {
-		termEnabled bool
-		stopEnabled bool
-	})
-
-	var protectionsM sync.Mutex
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 5)
-
 	for _, reservation := range result.Reservations {
 		for _, instance := range reservation.Instances {
 			instanceID := aws.ToString(instance.InstanceId)
 
-			wg.Add(1)
-			go func(id string) {
-				defer wg.Done()
-				sem <- struct{}{}
-				termProtection, stopProtection, err := c.getProtectionAttributes(ctx, id)
-				<-sem
+			term, stop := c.getCachedProtection(instanceID)
+			if !useCachedProtections {
+				term, stop = false, false
+			}
 
-				if err != nil {
-					c.log.Warn("Failed to get instance protections", "instanceID", id, "error", err)
-				}
-
-				protectionsM.Lock()
-				protections[id] = struct {
-					termEnabled bool
-					stopEnabled bool
-				}{
-					termEnabled: termProtection,
-					stopEnabled: stopProtection,
-				}
-				protectionsM.Unlock()
-			}(instanceID)
-		}
-	}
-
-	wg.Wait()
-
-	for _, reservation := range result.Reservations {
-		for _, instance := range reservation.Instances {
-			instanceID := aws.ToString(instance.InstanceId)
-			protection := protections[instanceID]
-
-			i := convertToModelInstance(instance, c.region, protection.termEnabled, protection.stopEnabled)
+			i := convertToModelInstance(instance, c.region, term, stop)
 			instances = append(instances, i)
 		}
 	}
@@ -277,6 +251,82 @@ func (c *EC2Client) SetStopProtection(ctx context.Context, instanceID string, en
 	}
 
 	return nil
+}
+
+// RefreshProtectionStatus retrieves protections for a single instance, updates the cache, and returns the values.
+func (c *EC2Client) RefreshProtectionStatus(ctx context.Context, instanceID string) (bool, bool, error) {
+	term, stop, err := c.getProtectionAttributes(ctx, instanceID)
+	if err != nil {
+		return false, false, err
+	}
+
+	c.setCachedProtection(instanceID, term, stop)
+
+	return term, stop, nil
+}
+
+// FetchProtectionStatuses fetches protections in the background for the provided instance IDs and streams results.
+func (c *EC2Client) FetchProtectionStatuses(ctx context.Context, instanceIDs []string, workerLimit int) <-chan model.ProtectionStatus {
+	results := make(chan model.ProtectionStatus)
+
+	go func() {
+		defer close(results)
+
+		sem := make(chan struct{}, workerLimit)
+		var wg sync.WaitGroup
+
+		for _, id := range instanceIDs {
+			instanceID := id
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+
+				sem <- struct{}{}
+				termProtection, stopProtection, err := c.getProtectionAttributes(ctx, instanceID)
+				<-sem
+
+				if err != nil {
+					c.log.Warn("Failed to get instance protections", "instanceID", instanceID, "error", err)
+					return
+				}
+
+				results <- model.ProtectionStatus{
+					InstanceID:            instanceID,
+					TerminationProtection: termProtection,
+					StopProtection:        stopProtection,
+				}
+
+				c.setCachedProtection(instanceID, termProtection, stopProtection)
+			}()
+		}
+
+		wg.Wait()
+	}()
+
+	return results
+}
+
+// GetCachedProtectionStatus returns cached protections if available.
+func (c *EC2Client) GetCachedProtectionStatus(instanceID string) (bool, bool, bool) {
+	return c.getCachedProtection(instanceID)
+}
+
+func (c *EC2Client) setCachedProtection(instanceID string, term, stop bool) {
+	c.protectionsM.Lock()
+	c.protections[instanceID] = protectionStatus{termination: term, stop: stop}
+	c.protectionsM.Unlock()
+}
+
+func (c *EC2Client) getCachedProtection(instanceID string) (bool, bool, bool) {
+	c.protectionsM.RLock()
+	defer c.protectionsM.RUnlock()
+
+	protection, ok := c.protections[instanceID]
+	if !ok {
+		return false, false, false
+	}
+
+	return protection.termination, protection.stop, true
 }
 
 func (c *EC2Client) getProtectionAttributes(ctx context.Context, instanceID string) (bool, bool, error) {
