@@ -199,6 +199,7 @@ func (ui *UI) setupKeyBindings() {
 
 // RefreshInstances refreshes the instances list
 func (ui *UI) RefreshInstances() {
+	_ = ui.instancesView.GetSelectedInstance()
 	ui.refreshMutex.Lock()
 	defer ui.refreshMutex.Unlock()
 

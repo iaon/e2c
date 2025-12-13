@@ -24,7 +24,6 @@ type InstancesView struct {
 	instances       []model.Instance
 	instancesM      sync.Mutex
 	selected        int
-	selectedID      string
 	headers         []string
 	headerColor     tcell.Color
 	textColor       tcell.Color
@@ -43,7 +42,6 @@ func NewInstancesView(ui *UI) *InstancesView {
 		table:           tview.NewTable().SetSelectable(true, false).SetFixed(1, 0),
 		instances:       make([]model.Instance, 0),
 		selected:        0,
-		selectedID:      "",
 		headers:         []string{"ID", "Name", "State", "Type", "Region", "Private IP", "Public IP", "Age"},
 		headerColor:     color.AppColors.Title,
 		textColor:       color.AppColors.Foreground,
@@ -63,17 +61,6 @@ func NewInstancesView(ui *UI) *InstancesView {
 		SetTitle("EC2 Instances").
 		SetBorderColor(color.AppColors.Border).
 		SetTitleColor(color.AppColors.Title)
-
-	// Track selection changes to preserve cursor position across refreshes
-	v.table.SetSelectionChangedFunc(func(row, column int) {
-		v.instancesM.Lock()
-		defer v.instancesM.Unlock()
-
-		if row > 0 && row-1 < len(v.instances) {
-			v.selected = row - 1
-			v.selectedID = v.instances[v.selected].ID
-		}
-	})
 
 	// Set up cell selection handler
 	v.table.SetSelectedFunc(func(row, column int) {
@@ -174,34 +161,12 @@ func (v *InstancesView) UpdateInstances(instances []model.Instance) {
 		}
 	}
 
-	// Restore selection based on instance ID to avoid cursor jumps after refreshes
-	targetID := v.selectedID
-	if targetID == "" && len(instances) > 0 {
-		targetID = instances[0].ID
-	}
-
-	rowToSelect := -1
-	if targetID != "" {
-		for idx, inst := range instances {
-			if inst.ID == targetID {
-				rowToSelect = idx
-				break
-			}
-		}
-	}
-
-	if rowToSelect == -1 && len(instances) > 0 {
-		rowToSelect = 0
-		targetID = instances[0].ID
-	}
-
-	if rowToSelect >= 0 {
-		v.selected = rowToSelect
-		v.selectedID = targetID
-		v.table.Select(rowToSelect+1, 0)
-		if rowToSelect == 0 {
-			v.table.ScrollToBeginning()
-		}
+	// Restore selection if possible
+	if v.selected < len(instances) {
+		v.table.Select(v.selected+1, 0)
+	} else if len(instances) > 0 {
+		v.table.Select(1, 0)
+		v.selected = 0
 	}
 }
 
@@ -216,7 +181,6 @@ func (v *InstancesView) GetSelectedInstance() *model.Instance {
 	}
 
 	v.selected = row - 1
-	v.selectedID = v.instances[v.selected].ID
 
 	// Highlight the selected row is handled by tview automatically
 
