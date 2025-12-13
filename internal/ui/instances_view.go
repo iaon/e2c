@@ -19,35 +19,41 @@ import (
 
 // InstancesView represents the instances table view
 type InstancesView struct {
-	ui           *UI
-	table        *tview.Table
-	instances    []model.Instance
-	instancesM   sync.Mutex
-	selected     int
-	headers      []string
-	headerColor  tcell.Color
-	textColor    tcell.Color
-	tagColor     tcell.Color
-	runningColor tcell.Color
-	stoppedColor tcell.Color
-	pendingColor tcell.Color
+	ui              *UI
+	table           *tview.Table
+	instances       []model.Instance
+	instancesM      sync.Mutex
+	selected        int
+	headers         []string
+	headerColor     tcell.Color
+	textColor       tcell.Color
+	tagColor        tcell.Color
+	runningColor    tcell.Color
+	stoppedColor    tcell.Color
+	pendingColor    tcell.Color
+	showProtections bool
 	// Theme support will be added in future versions
 }
 
 // NewInstancesView creates a new instances view
 func NewInstancesView(ui *UI) *InstancesView {
 	v := &InstancesView{
-		ui:           ui,
-		table:        tview.NewTable().SetSelectable(true, false).SetFixed(1, 0),
-		instances:    make([]model.Instance, 0),
-		selected:     0,
-		headers:      []string{"ID", "Name", "State", "Type", "Region", "Private IP", "Public IP", "Age"},
-		headerColor:  color.AppColors.Title,
-		textColor:    color.AppColors.Foreground,
-		tagColor:     color.AppColors.Secondary,
-		runningColor: color.AppColors.Running,
-		stoppedColor: color.AppColors.Stopped,
-		pendingColor: color.AppColors.Pending,
+		ui:              ui,
+		table:           tview.NewTable().SetSelectable(true, false).SetFixed(1, 0),
+		instances:       make([]model.Instance, 0),
+		selected:        0,
+		headers:         []string{"ID", "Name", "State", "Type", "Region", "Private IP", "Public IP", "Age"},
+		headerColor:     color.AppColors.Title,
+		textColor:       color.AppColors.Foreground,
+		tagColor:        color.AppColors.Secondary,
+		runningColor:    color.AppColors.Running,
+		stoppedColor:    color.AppColors.Stopped,
+		pendingColor:    color.AppColors.Pending,
+		showProtections: ui.config.UI.ExpertMode,
+	}
+
+	if v.showProtections {
+		v.headers = append(v.headers, "T.Protect", "S.Protect")
 	}
 
 	// Set up table
@@ -139,6 +145,26 @@ func (v *InstancesView) UpdateInstances(instances []model.Instance) {
 			tview.NewTableCell(" "+formatDuration(instance.Age)+" ").
 				SetTextColor(v.textColor).
 				SetAlign(tview.AlignRight))
+
+		if v.showProtections {
+			protectionText := "Off"
+			if instance.TerminationProtection {
+				protectionText = "On"
+			}
+			v.table.SetCell(row, 8,
+				tview.NewTableCell(" "+protectionText+" ").
+					SetTextColor(v.textColor).
+					SetAlign(tview.AlignCenter))
+
+			stopProtectionText := "Off"
+			if instance.StopProtection {
+				stopProtectionText = "On"
+			}
+			v.table.SetCell(row, 9,
+				tview.NewTableCell(" "+stopProtectionText+" ").
+					SetTextColor(v.textColor).
+					SetAlign(tview.AlignCenter))
+		}
 	}
 
 	// Restore selection if possible
@@ -189,6 +215,8 @@ func (v *InstancesView) ShowInstanceDetails(instance model.Instance) {
   [blue]Public IP:[white]     %s
   [blue]Platform:[white]      %s
   [blue]Architecture:[white]  %s
+  [blue]T.Protect:[white]     %s
+  [blue]S.Protect:[white]     %s
 `,
 		instance.ID,
 		instance.Name,
@@ -201,6 +229,8 @@ func (v *InstancesView) ShowInstanceDetails(instance model.Instance) {
 		instance.PublicIP,
 		instance.Platform,
 		instance.Architecture,
+		formatProtectionStatus(instance.TerminationProtection),
+		formatProtectionStatus(instance.StopProtection),
 	)
 
 	// Format tags section with a more prominent header
@@ -333,6 +363,13 @@ func getStateColor(state string) tcell.Color {
 	default:
 		return color.AppColors.Foreground
 	}
+}
+
+func formatProtectionStatus(enabled bool) string {
+	if enabled {
+		return "Enabled"
+	}
+	return "Disabled"
 }
 
 // formatDuration formats a duration in a human-readable way

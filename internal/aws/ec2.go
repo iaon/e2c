@@ -87,7 +87,12 @@ func (c *EC2Client) ListInstances(ctx context.Context) ([]model.Instance, error)
 
 	for _, reservation := range result.Reservations {
 		for _, instance := range reservation.Instances {
-			i := convertToModelInstance(instance, c.region)
+			termProtection, stopProtection, err := c.getProtectionAttributes(ctx, aws.ToString(instance.InstanceId))
+			if err != nil {
+				c.log.Warn("Failed to get instance protections", "instanceID", aws.ToString(instance.InstanceId), "error", err)
+			}
+
+			i := convertToModelInstance(instance, c.region, termProtection, stopProtection)
 			instances = append(instances, i)
 		}
 	}
@@ -206,19 +211,76 @@ func (c *EC2Client) GetInstanceConsoleOutput(ctx context.Context, instanceID str
 	return *output.Output, nil
 }
 
+// SetTerminationProtection enables or disables termination protection on an instance
+func (c *EC2Client) SetTerminationProtection(ctx context.Context, instanceID string, enabled bool) error {
+	c.log.Info("Updating termination protection", "instanceID", instanceID, "enabled", enabled)
+
+	input := &ec2.ModifyInstanceAttributeInput{
+		InstanceId:            aws.String(instanceID),
+		DisableApiTermination: &types.AttributeBooleanValue{Value: aws.Bool(enabled)},
+	}
+
+	if _, err := c.client.ModifyInstanceAttribute(ctx, input); err != nil {
+		return fmt.Errorf("failed to update termination protection for instance %s: %w", instanceID, err)
+	}
+
+	return nil
+}
+
+// SetStopProtection enables or disables stop protection on an instance
+func (c *EC2Client) SetStopProtection(ctx context.Context, instanceID string, enabled bool) error {
+	c.log.Info("Updating stop protection", "instanceID", instanceID, "enabled", enabled)
+
+	input := &ec2.ModifyInstanceAttributeInput{
+		InstanceId:     aws.String(instanceID),
+		DisableApiStop: &types.AttributeBooleanValue{Value: aws.Bool(enabled)},
+	}
+
+	if _, err := c.client.ModifyInstanceAttribute(ctx, input); err != nil {
+		return fmt.Errorf("failed to update stop protection for instance %s: %w", instanceID, err)
+	}
+
+	return nil
+}
+
+func (c *EC2Client) getProtectionAttributes(ctx context.Context, instanceID string) (bool, bool, error) {
+	termAttr, err := c.client.DescribeInstanceAttribute(ctx, &ec2.DescribeInstanceAttributeInput{
+		InstanceId: aws.String(instanceID),
+		Attribute:  types.InstanceAttributeNameDisableApiTermination,
+	})
+	if err != nil {
+		return false, false, fmt.Errorf("failed to describe termination protection: %w", err)
+	}
+
+	stopAttr, err := c.client.DescribeInstanceAttribute(ctx, &ec2.DescribeInstanceAttributeInput{
+		InstanceId: aws.String(instanceID),
+		Attribute:  types.InstanceAttributeNameDisableApiStop,
+	})
+	if err != nil {
+		return false, false, fmt.Errorf("failed to describe stop protection: %w", err)
+	}
+
+	termEnabled := termAttr.DisableApiTermination != nil && termAttr.DisableApiTermination.Value != nil && aws.ToBool(termAttr.DisableApiTermination.Value)
+	stopEnabled := stopAttr.DisableApiStop != nil && stopAttr.DisableApiStop.Value != nil && aws.ToBool(stopAttr.DisableApiStop.Value)
+
+	return termEnabled, stopEnabled, nil
+}
+
 // convertToModelInstance converts an EC2 instance to our internal model
-func convertToModelInstance(instance types.Instance, region string) model.Instance {
+func convertToModelInstance(instance types.Instance, region string, terminationProtection, stopProtection bool) model.Instance {
 	i := model.Instance{
-		ID:           *instance.InstanceId,
-		Type:         string(instance.InstanceType),
-		State:        string(instance.State.Name),
-		Region:       region,
-		LaunchTime:   aws.ToTime(instance.LaunchTime),
-		PrivateIP:    aws.ToString(instance.PrivateIpAddress),
-		PublicIP:     aws.ToString(instance.PublicIpAddress),
-		Platform:     aws.ToString(instance.PlatformDetails),
-		Architecture: string(instance.Architecture),
-		Tags:         make(map[string]string),
+		ID:                    *instance.InstanceId,
+		Type:                  string(instance.InstanceType),
+		State:                 string(instance.State.Name),
+		Region:                region,
+		LaunchTime:            aws.ToTime(instance.LaunchTime),
+		PrivateIP:             aws.ToString(instance.PrivateIpAddress),
+		PublicIP:              aws.ToString(instance.PublicIpAddress),
+		Platform:              aws.ToString(instance.PlatformDetails),
+		Architecture:          string(instance.Architecture),
+		Tags:                  make(map[string]string),
+		TerminationProtection: terminationProtection,
+		StopProtection:        stopProtection,
 	}
 
 	// Extract all tags

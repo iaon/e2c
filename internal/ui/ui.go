@@ -58,7 +58,7 @@ func NewUI(log *slog.Logger, ec2Client *aws.EC2Client, cfg *config.Config) *UI {
 	ui.instancesView = NewInstancesView(ui)
 	ui.overviewPanel = NewOverviewPanel(ui)
 	ui.statusBar = NewStatusBar(ui)
-	ui.helpView = NewHelpView()
+	ui.helpView = NewHelpView(cfg.UI.ExpertMode)
 
 	// Set initial region in status bar
 	ui.statusBar.SetRegion(ec2Client.GetRegion())
@@ -180,6 +180,16 @@ func (ui *UI) setupKeyBindings() {
 				case 'l':
 					ui.handleViewLogs()
 					return nil
+				case 'x':
+					if ui.config.UI.ExpertMode {
+						ui.handleToggleTerminationProtection()
+						return nil
+					}
+				case 'n':
+					if ui.config.UI.ExpertMode {
+						ui.handleToggleStopProtection()
+						return nil
+					}
 				}
 			}
 		}
@@ -341,7 +351,13 @@ func (ui *UI) ShowHelpDialog() {
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignLeft)
 
-	helpText.SetText(`
+	expertShortcuts := ""
+	if ui.config.UI.ExpertMode {
+		expertShortcuts = "  [green]x[white]      Toggle termination protection[-]\n" +
+			"  [green]n[white]      Toggle stop protection[-]\n"
+	}
+
+	helpText.SetText(fmt.Sprintf(`
 [::b]e2c - AWS EC2 Terminal UI Manager[::-]
 
 [yellow]Keyboard Shortcuts:[-]
@@ -355,10 +371,10 @@ func (ui *UI) ShowHelpDialog() {
   [green]t[white]      Terminate selected instance[-]
   [green]c[white]      Connect to selected instance via SSH[-]
   [green]l[white]      View instance logs/console output[-]
-  [green]Esc[white]    Close dialogs[-]
+%s  [green]Esc[white]    Close dialogs[-]
 
 [yellow]Press Esc to close this help[-]
-`)
+`, expertShortcuts))
 
 	helpText.SetBorder(true).SetTitle("Help")
 
@@ -580,6 +596,72 @@ func (ui *UI) handleTerminateInstance() {
 	)
 }
 
+// handleToggleTerminationProtection toggles termination protection on the selected instance
+func (ui *UI) handleToggleTerminationProtection() {
+	selectedInstance := ui.instancesView.GetSelectedInstance()
+	if selectedInstance == nil {
+		ui.statusBar.SetError("No instance selected")
+		return
+	}
+
+	targetState := !selectedInstance.TerminationProtection
+	action := "Disabling"
+	if targetState {
+		action = "Enabling"
+	}
+
+	ui.statusBar.SetStatus(fmt.Sprintf("%s termination protection for %s...", action, selectedInstance.ID))
+
+	go func() {
+		err := ui.ec2Client.SetTerminationProtection(ui.ctx, selectedInstance.ID, targetState)
+		if err != nil {
+			ui.app.QueueUpdateDraw(func() {
+				ui.log.Error("Failed to update termination protection", "error", err)
+				ui.statusBar.SetError(fmt.Sprintf("Error: %v", err))
+			})
+			return
+		}
+
+		ui.app.QueueUpdateDraw(func() {
+			ui.statusBar.SetStatus(fmt.Sprintf("Termination protection %s for %s", protectionStatusText(targetState), selectedInstance.ID))
+			ui.RefreshInstances()
+		})
+	}()
+}
+
+// handleToggleStopProtection toggles stop protection on the selected instance
+func (ui *UI) handleToggleStopProtection() {
+	selectedInstance := ui.instancesView.GetSelectedInstance()
+	if selectedInstance == nil {
+		ui.statusBar.SetError("No instance selected")
+		return
+	}
+
+	targetState := !selectedInstance.StopProtection
+	action := "Disabling"
+	if targetState {
+		action = "Enabling"
+	}
+
+	ui.statusBar.SetStatus(fmt.Sprintf("%s stop protection for %s...", action, selectedInstance.ID))
+
+	go func() {
+		err := ui.ec2Client.SetStopProtection(ui.ctx, selectedInstance.ID, targetState)
+		if err != nil {
+			ui.app.QueueUpdateDraw(func() {
+				ui.log.Error("Failed to update stop protection", "error", err)
+				ui.statusBar.SetError(fmt.Sprintf("Error: %v", err))
+			})
+			return
+		}
+
+		ui.app.QueueUpdateDraw(func() {
+			ui.statusBar.SetStatus(fmt.Sprintf("Stop protection %s for %s", protectionStatusText(targetState), selectedInstance.ID))
+			ui.RefreshInstances()
+		})
+	}()
+}
+
 // handleConnectInstance handles connecting to the selected instance
 func (ui *UI) handleConnectInstance() {
 	selectedInstance := ui.instancesView.GetSelectedInstance()
@@ -690,6 +772,13 @@ func containsIgnoreCase(s, substr string) bool {
 	}
 	return fmt.Sprintf("%s", s) != "" &&
 		containsRune(fmt.Sprintf("%s", s), fmt.Sprintf("%s", substr))
+}
+
+func protectionStatusText(enabled bool) string {
+	if enabled {
+		return "enabled"
+	}
+	return "disabled"
 }
 
 // containsRune is a simple case-insensitive substring check

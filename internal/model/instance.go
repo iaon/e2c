@@ -22,6 +22,9 @@ type Instance struct {
 	Platform     string            // Platform details (e.g., Linux/UNIX, Windows)
 	Architecture string            // Architecture (e.g., x86_64, arm64)
 	Tags         map[string]string // AWS tags associated with the instance
+	// Protection settings
+	TerminationProtection bool // Whether termination protection is enabled
+	StopProtection        bool // Whether stop protection is enabled
 }
 
 // GetSSHCommand returns an SSH command for connecting to the instance
