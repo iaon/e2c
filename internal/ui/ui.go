@@ -632,12 +632,11 @@ func (ui *UI) handleToggleTerminationProtection() {
 
 	go func() {
 		termState := selectedInstance.TerminationProtection
-		stopState := selectedInstance.StopProtection
 		knownTerm := selectedInstance.TerminationProtectionKnown
 		knownStop := selectedInstance.StopProtectionKnown
 
 		if !knownTerm || !knownStop {
-			refreshedTerm, refreshedStop, err := ui.ec2Client.RefreshProtectionStatus(ui.ctx, selectedInstance.ID)
+			refreshedTerm, _, err := ui.ec2Client.RefreshProtectionStatus(ui.ctx, selectedInstance.ID)
 			if err != nil {
 				ui.app.QueueUpdateDraw(func() {
 					ui.statusBar.SetError(fmt.Sprintf("Failed to reload protections: %v", err))
@@ -646,9 +645,8 @@ func (ui *UI) handleToggleTerminationProtection() {
 			}
 
 			termState = refreshedTerm
-			stopState = refreshedStop
 			ui.app.QueueUpdateDraw(func() {
-				ui.instancesView.UpdateProtection(selectedInstance.ID, refreshedTerm, refreshedStop)
+				ui.instancesView.UpdateProtection(selectedInstance.ID, refreshedTerm, selectedInstance.StopProtection)
 			})
 		}
 
@@ -695,13 +693,12 @@ func (ui *UI) handleToggleStopProtection() {
 	}
 
 	go func() {
-		termState := selectedInstance.TerminationProtection
 		stopState := selectedInstance.StopProtection
 		knownTerm := selectedInstance.TerminationProtectionKnown
 		knownStop := selectedInstance.StopProtectionKnown
 
 		if !knownTerm || !knownStop {
-			refreshedTerm, refreshedStop, err := ui.ec2Client.RefreshProtectionStatus(ui.ctx, selectedInstance.ID)
+			_, refreshedStop, err := ui.ec2Client.RefreshProtectionStatus(ui.ctx, selectedInstance.ID)
 			if err != nil {
 				ui.app.QueueUpdateDraw(func() {
 					ui.statusBar.SetError(fmt.Sprintf("Failed to reload protections: %v", err))
@@ -709,10 +706,9 @@ func (ui *UI) handleToggleStopProtection() {
 				return
 			}
 
-			termState = refreshedTerm
 			stopState = refreshedStop
 			ui.app.QueueUpdateDraw(func() {
-				ui.instancesView.UpdateProtection(selectedInstance.ID, refreshedTerm, refreshedStop)
+				ui.instancesView.UpdateProtection(selectedInstance.ID, selectedInstance.TerminationProtection, refreshedStop)
 			})
 		}
 
