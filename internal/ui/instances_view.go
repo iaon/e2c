@@ -24,6 +24,7 @@ type InstancesView struct {
 	instances       []model.Instance
 	instancesM      sync.Mutex
 	selected        int
+	selectedID      string
 	headers         []string
 	headerColor     tcell.Color
 	textColor       tcell.Color
@@ -42,6 +43,7 @@ func NewInstancesView(ui *UI) *InstancesView {
 		table:           tview.NewTable().SetSelectable(true, false).SetFixed(1, 0),
 		instances:       make([]model.Instance, 0),
 		selected:        0,
+		selectedID:      "",
 		headers:         []string{"ID", "Name", "State", "Type", "Region", "Private IP", "Public IP", "Age"},
 		headerColor:     color.AppColors.Title,
 		textColor:       color.AppColors.Foreground,
@@ -61,6 +63,17 @@ func NewInstancesView(ui *UI) *InstancesView {
 		SetTitle("EC2 Instances").
 		SetBorderColor(color.AppColors.Border).
 		SetTitleColor(color.AppColors.Title)
+
+	// Track selection changes to preserve cursor position across refreshes
+	v.table.SetSelectionChangedFunc(func(row, column int) {
+		v.instancesM.Lock()
+		defer v.instancesM.Unlock()
+
+		if row > 0 && row-1 < len(v.instances) {
+			v.selected = row - 1
+			v.selectedID = v.instances[v.selected].ID
+		}
+	})
 
 	// Set up cell selection handler
 	v.table.SetSelectedFunc(func(row, column int) {
@@ -147,19 +160,13 @@ func (v *InstancesView) UpdateInstances(instances []model.Instance) {
 				SetAlign(tview.AlignRight))
 
 		if v.showProtections {
-			protectionText := "Off"
-			if instance.TerminationProtection {
-				protectionText = "On"
-			}
+			protectionText := formatProtectionCell(instance.TerminationProtection, instance.TerminationProtectionKnown)
 			v.table.SetCell(row, 8,
 				tview.NewTableCell(" "+protectionText+" ").
 					SetTextColor(v.textColor).
 					SetAlign(tview.AlignCenter))
 
-			stopProtectionText := "Off"
-			if instance.StopProtection {
-				stopProtectionText = "On"
-			}
+			stopProtectionText := formatProtectionCell(instance.StopProtection, instance.StopProtectionKnown)
 			v.table.SetCell(row, 9,
 				tview.NewTableCell(" "+stopProtectionText+" ").
 					SetTextColor(v.textColor).
@@ -167,12 +174,34 @@ func (v *InstancesView) UpdateInstances(instances []model.Instance) {
 		}
 	}
 
-	// Restore selection if possible
-	if v.selected < len(instances) {
-		v.table.Select(v.selected+1, 0)
-	} else if len(instances) > 0 {
-		v.table.Select(1, 0)
-		v.selected = 0
+	// Restore selection based on instance ID to avoid cursor jumps after refreshes
+	targetID := v.selectedID
+	if targetID == "" && len(instances) > 0 {
+		targetID = instances[0].ID
+	}
+
+	rowToSelect := -1
+	if targetID != "" {
+		for idx, inst := range instances {
+			if inst.ID == targetID {
+				rowToSelect = idx
+				break
+			}
+		}
+	}
+
+	if rowToSelect == -1 && len(instances) > 0 {
+		rowToSelect = 0
+		targetID = instances[0].ID
+	}
+
+	if rowToSelect >= 0 {
+		v.selected = rowToSelect
+		v.selectedID = targetID
+		v.table.Select(rowToSelect+1, 0)
+		if rowToSelect == 0 {
+			v.table.ScrollToBeginning()
+		}
 	}
 }
 
@@ -187,6 +216,7 @@ func (v *InstancesView) GetSelectedInstance() *model.Instance {
 	}
 
 	v.selected = row - 1
+	v.selectedID = v.instances[v.selected].ID
 
 	// Highlight the selected row is handled by tview automatically
 
@@ -204,6 +234,8 @@ func (v *InstancesView) UpdateProtection(instanceID string, terminationProtectio
 		if inst.ID == instanceID {
 			v.instances[idx].TerminationProtection = terminationProtection
 			v.instances[idx].StopProtection = stopProtection
+			v.instances[idx].TerminationProtectionKnown = true
+			v.instances[idx].StopProtectionKnown = true
 			rowIndex = idx + 1
 			found = true
 			break
@@ -214,19 +246,13 @@ func (v *InstancesView) UpdateProtection(instanceID string, terminationProtectio
 		return
 	}
 
-	terminationText := "Off"
-	if terminationProtection {
-		terminationText = "On"
-	}
+	terminationText := formatProtectionCell(terminationProtection, true)
 	v.table.SetCell(rowIndex, 8,
 		tview.NewTableCell(" "+terminationText+" ").
 			SetTextColor(v.textColor).
 			SetAlign(tview.AlignCenter))
 
-	stopText := "Off"
-	if stopProtection {
-		stopText = "On"
-	}
+	stopText := formatProtectionCell(stopProtection, true)
 	v.table.SetCell(rowIndex, 9,
 		tview.NewTableCell(" "+stopText+" ").
 			SetTextColor(v.textColor).
@@ -240,6 +266,8 @@ func (v *InstancesView) ShowInstanceDetails(instance model.Instance) {
 	if term, stop, ok := v.ui.ec2Client.GetCachedProtectionStatus(inst.ID); ok {
 		inst.TerminationProtection = term
 		inst.StopProtection = stop
+		inst.TerminationProtectionKnown = true
+		inst.StopProtectionKnown = true
 	} else {
 		termProtect, stopProtect, err := v.ui.ec2Client.RefreshProtectionStatus(v.ui.ctx, inst.ID)
 		if err != nil {
@@ -247,6 +275,8 @@ func (v *InstancesView) ShowInstanceDetails(instance model.Instance) {
 		} else {
 			inst.TerminationProtection = termProtect
 			inst.StopProtection = stopProtect
+			inst.TerminationProtectionKnown = true
+			inst.StopProtectionKnown = true
 			v.UpdateProtection(inst.ID, termProtect, stopProtect)
 		}
 	}
@@ -257,7 +287,7 @@ func (v *InstancesView) ShowInstanceDetails(instance model.Instance) {
 		SetScrollable(true).
 		SetWrap(true)
 
-	// Format instance details
+		// Format instance details
 	baseDetails := fmt.Sprintf(`
 [::b][yellow]Instance Details[white][::-]
   [blue]ID:[white]            %s
@@ -285,8 +315,8 @@ func (v *InstancesView) ShowInstanceDetails(instance model.Instance) {
 		inst.PublicIP,
 		inst.Platform,
 		inst.Architecture,
-		formatProtectionStatus(inst.TerminationProtection),
-		formatProtectionStatus(inst.StopProtection),
+		formatProtectionStatus(inst.TerminationProtection, inst.TerminationProtectionKnown),
+		formatProtectionStatus(inst.StopProtection, inst.StopProtectionKnown),
 	)
 
 	// Format tags section with a more prominent header
@@ -421,11 +451,24 @@ func getStateColor(state string) tcell.Color {
 	}
 }
 
-func formatProtectionStatus(enabled bool) string {
+func formatProtectionStatus(enabled bool, known bool) string {
+	if !known {
+		return "Unknown"
+	}
 	if enabled {
 		return "Enabled"
 	}
 	return "Disabled"
+}
+
+func formatProtectionCell(enabled bool, known bool) string {
+	if !known {
+		return "Unknown"
+	}
+	if enabled {
+		return "On"
+	}
+	return "Off"
 }
 
 // formatDuration formats a duration in a human-readable way

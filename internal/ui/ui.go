@@ -630,15 +630,38 @@ func (ui *UI) handleToggleTerminationProtection() {
 		return
 	}
 
-	targetState := !selectedInstance.TerminationProtection
-	action := "Disabling"
-	if targetState {
-		action = "Enabling"
-	}
-
-	ui.statusBar.SetStatus(fmt.Sprintf("%s termination protection for %s...", action, selectedInstance.ID))
-
 	go func() {
+		termState := selectedInstance.TerminationProtection
+		stopState := selectedInstance.StopProtection
+		knownTerm := selectedInstance.TerminationProtectionKnown
+		knownStop := selectedInstance.StopProtectionKnown
+
+		if !knownTerm || !knownStop {
+			refreshedTerm, refreshedStop, err := ui.ec2Client.RefreshProtectionStatus(ui.ctx, selectedInstance.ID)
+			if err != nil {
+				ui.app.QueueUpdateDraw(func() {
+					ui.statusBar.SetError(fmt.Sprintf("Failed to reload protections: %v", err))
+				})
+				return
+			}
+
+			termState = refreshedTerm
+			stopState = refreshedStop
+			ui.app.QueueUpdateDraw(func() {
+				ui.instancesView.UpdateProtection(selectedInstance.ID, refreshedTerm, refreshedStop)
+			})
+		}
+
+		targetState := !termState
+		action := "Disabling"
+		if targetState {
+			action = "Enabling"
+		}
+
+		ui.app.QueueUpdateDraw(func() {
+			ui.statusBar.SetStatus(fmt.Sprintf("%s termination protection for %s...", action, selectedInstance.ID))
+		})
+
 		err := ui.ec2Client.SetTerminationProtection(ui.ctx, selectedInstance.ID, targetState)
 		if err != nil {
 			ui.app.QueueUpdateDraw(func() {
@@ -671,15 +694,38 @@ func (ui *UI) handleToggleStopProtection() {
 		return
 	}
 
-	targetState := !selectedInstance.StopProtection
-	action := "Disabling"
-	if targetState {
-		action = "Enabling"
-	}
-
-	ui.statusBar.SetStatus(fmt.Sprintf("%s stop protection for %s...", action, selectedInstance.ID))
-
 	go func() {
+		termState := selectedInstance.TerminationProtection
+		stopState := selectedInstance.StopProtection
+		knownTerm := selectedInstance.TerminationProtectionKnown
+		knownStop := selectedInstance.StopProtectionKnown
+
+		if !knownTerm || !knownStop {
+			refreshedTerm, refreshedStop, err := ui.ec2Client.RefreshProtectionStatus(ui.ctx, selectedInstance.ID)
+			if err != nil {
+				ui.app.QueueUpdateDraw(func() {
+					ui.statusBar.SetError(fmt.Sprintf("Failed to reload protections: %v", err))
+				})
+				return
+			}
+
+			termState = refreshedTerm
+			stopState = refreshedStop
+			ui.app.QueueUpdateDraw(func() {
+				ui.instancesView.UpdateProtection(selectedInstance.ID, refreshedTerm, refreshedStop)
+			})
+		}
+
+		targetState := !stopState
+		action := "Disabling"
+		if targetState {
+			action = "Enabling"
+		}
+
+		ui.app.QueueUpdateDraw(func() {
+			ui.statusBar.SetStatus(fmt.Sprintf("%s stop protection for %s...", action, selectedInstance.ID))
+		})
+
 		err := ui.ec2Client.SetStopProtection(ui.ctx, selectedInstance.ID, targetState)
 		if err != nil {
 			ui.app.QueueUpdateDraw(func() {

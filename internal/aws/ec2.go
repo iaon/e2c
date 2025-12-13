@@ -97,12 +97,12 @@ func (c *EC2Client) ListInstances(ctx context.Context, useCachedProtections bool
 		for _, instance := range reservation.Instances {
 			instanceID := aws.ToString(instance.InstanceId)
 
-			term, stop, _ := c.getCachedProtection(instanceID)
+			term, stop, ok := c.getCachedProtection(instanceID)
 			if !useCachedProtections {
-				term, stop = false, false
+				term, stop, ok = false, false, false
 			}
 
-			i := convertToModelInstance(instance, c.region, term, stop)
+			i := convertToModelInstance(instance, c.region, term, stop, ok, ok)
 			instances = append(instances, i)
 		}
 	}
@@ -353,20 +353,22 @@ func (c *EC2Client) getProtectionAttributes(ctx context.Context, instanceID stri
 }
 
 // convertToModelInstance converts an EC2 instance to our internal model
-func convertToModelInstance(instance types.Instance, region string, terminationProtection, stopProtection bool) model.Instance {
+func convertToModelInstance(instance types.Instance, region string, terminationProtection, stopProtection bool, termKnown, stopKnown bool) model.Instance {
 	i := model.Instance{
-		ID:                    *instance.InstanceId,
-		Type:                  string(instance.InstanceType),
-		State:                 string(instance.State.Name),
-		Region:                region,
-		LaunchTime:            aws.ToTime(instance.LaunchTime),
-		PrivateIP:             aws.ToString(instance.PrivateIpAddress),
-		PublicIP:              aws.ToString(instance.PublicIpAddress),
-		Platform:              aws.ToString(instance.PlatformDetails),
-		Architecture:          string(instance.Architecture),
-		Tags:                  make(map[string]string),
-		TerminationProtection: terminationProtection,
-		StopProtection:        stopProtection,
+		ID:                         *instance.InstanceId,
+		Type:                       string(instance.InstanceType),
+		State:                      string(instance.State.Name),
+		Region:                     region,
+		LaunchTime:                 aws.ToTime(instance.LaunchTime),
+		PrivateIP:                  aws.ToString(instance.PrivateIpAddress),
+		PublicIP:                   aws.ToString(instance.PublicIpAddress),
+		Platform:                   aws.ToString(instance.PlatformDetails),
+		Architecture:               string(instance.Architecture),
+		Tags:                       make(map[string]string),
+		TerminationProtection:      terminationProtection,
+		StopProtection:             stopProtection,
+		TerminationProtectionKnown: termKnown,
+		StopProtectionKnown:        stopKnown,
 	}
 
 	// Extract all tags
