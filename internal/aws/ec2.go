@@ -97,7 +97,7 @@ func (c *EC2Client) ListInstances(ctx context.Context, useCachedProtections bool
 		for _, instance := range reservation.Instances {
 			instanceID := aws.ToString(instance.InstanceId)
 
-			term, stop := c.getCachedProtection(instanceID)
+			term, stop, _ := c.getCachedProtection(instanceID)
 			if !useCachedProtections {
 				term, stop = false, false
 			}
