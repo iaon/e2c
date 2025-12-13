@@ -84,15 +84,51 @@ func (c *EC2Client) ListInstances(ctx context.Context) ([]model.Instance, error)
 	}
 
 	instances := make([]model.Instance, 0)
+	protections := make(map[string]struct {
+		termEnabled bool
+		stopEnabled bool
+	})
+
+	var protectionsM sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 5)
 
 	for _, reservation := range result.Reservations {
 		for _, instance := range reservation.Instances {
-			termProtection, stopProtection, err := c.getProtectionAttributes(ctx, aws.ToString(instance.InstanceId))
-			if err != nil {
-				c.log.Warn("Failed to get instance protections", "instanceID", aws.ToString(instance.InstanceId), "error", err)
-			}
+			instanceID := aws.ToString(instance.InstanceId)
 
-			i := convertToModelInstance(instance, c.region, termProtection, stopProtection)
+			wg.Add(1)
+			go func(id string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				termProtection, stopProtection, err := c.getProtectionAttributes(ctx, id)
+				<-sem
+
+				if err != nil {
+					c.log.Warn("Failed to get instance protections", "instanceID", id, "error", err)
+				}
+
+				protectionsM.Lock()
+				protections[id] = struct {
+					termEnabled bool
+					stopEnabled bool
+				}{
+					termEnabled: termProtection,
+					stopEnabled: stopProtection,
+				}
+				protectionsM.Unlock()
+			}(instanceID)
+		}
+	}
+
+	wg.Wait()
+
+	for _, reservation := range result.Reservations {
+		for _, instance := range reservation.Instances {
+			instanceID := aws.ToString(instance.InstanceId)
+			protection := protections[instanceID]
+
+			i := convertToModelInstance(instance, c.region, protection.termEnabled, protection.stopEnabled)
 			instances = append(instances, i)
 		}
 	}
