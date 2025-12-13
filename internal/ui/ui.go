@@ -205,10 +205,7 @@ func (ui *UI) RefreshInstances() {
 	ui.statusBar.SetStatus("Refreshing instances...")
 
 	go func() {
-		listCtx, cancelList := context.WithTimeout(ui.ctx, 30*time.Second)
-		defer cancelList()
-
-		instances, err := ui.ec2Client.ListInstances(listCtx, ui.config.UI.ExpertMode)
+		instances, err := ui.ec2Client.ListInstances(ui.ctx, ui.config.UI.ExpertMode)
 		if err != nil {
 			ui.log.Error("Failed to list instances", "error", err)
 			ui.statusBar.SetError(fmt.Sprintf("Error: %v", err))
@@ -238,15 +235,12 @@ func (ui *UI) RefreshInstances() {
 		})
 
 		if ui.config.UI.ExpertMode {
-			protectionCtx, cancelProtection := context.WithTimeout(ui.ctx, 60*time.Second)
-			defer cancelProtection()
-
-			ui.fetchProtectionsInBackground(protectionCtx, filteredInstances)
+			ui.fetchProtectionsInBackground(filteredInstances)
 		}
 	}()
 }
 
-func (ui *UI) fetchProtectionsInBackground(ctx context.Context, instances []model.Instance) {
+func (ui *UI) fetchProtectionsInBackground(instances []model.Instance) {
 	idsToFetch := make([]string, 0, len(instances))
 	for _, inst := range instances {
 		if _, _, ok := ui.ec2Client.GetCachedProtectionStatus(inst.ID); ok {
@@ -260,7 +254,7 @@ func (ui *UI) fetchProtectionsInBackground(ctx context.Context, instances []mode
 	}
 
 	go func() {
-		for status := range ui.ec2Client.FetchProtectionStatuses(ctx, idsToFetch, 5) {
+		for status := range ui.ec2Client.FetchProtectionStatuses(ui.ctx, idsToFetch, 5) {
 			ui.app.QueueUpdateDraw(func() {
 				ui.instancesView.UpdateProtection(status.InstanceID, status.TerminationProtection, status.StopProtection)
 			})
