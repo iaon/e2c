@@ -86,6 +86,10 @@ ui:
   expert_mode: false
   # Compact mode reduces whitespace in the UI
   compact: false
+  # Preferred terminal command for SSH connections
+  terminal: xterm -e
+  # Prefer private IP in the connect dialog (when available)
+  connect_prefer_private: false
 ```
 
 ### Environment Variables
