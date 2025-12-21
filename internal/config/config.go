@@ -25,8 +25,9 @@ type AWSConfig struct {
 
 // UIConfig holds UI-specific configuration
 type UIConfig struct {
-	Compact    bool `mapstructure:"compact"`
-	ExpertMode bool `mapstructure:"expert_mode"`
+	Compact    bool   `mapstructure:"compact"`
+	ExpertMode bool   `mapstructure:"expert_mode"`
+	Terminal   string `mapstructure:"terminal"`
 }
 
 // LoadConfig loads the configuration from file and environment variables
@@ -37,6 +38,7 @@ func LoadConfig(log *slog.Logger) (*Config, error) {
 	viper.SetDefault("aws.profile", "")
 	viper.SetDefault("ui.compact", false)
 	viper.SetDefault("ui.expert_mode", false)
+	viper.SetDefault("ui.terminal", "xterm -e")
 
 	// Config file name and paths
 	viper.SetConfigName("config")

@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -774,11 +776,23 @@ func (ui *UI) handleConnectInstance() {
 
 	form := tview.NewForm()
 	form.AddInputField("Username:", defaultUser, 20, nil, nil)
+	ipOptions, ipValues := ui.buildIPOptions(selectedInstance)
+	if len(ipValues) == 0 {
+		ui.statusBar.SetError("No IP address available for SSH connection")
+		return
+	}
+
+	selectedIP := ipValues[0]
+	form.AddDropDown("IP Address:", ipOptions, 0, func(option string, optionIndex int) {
+		if optionIndex >= 0 && optionIndex < len(ipValues) {
+			selectedIP = ipValues[optionIndex]
+		}
+	})
 	form.AddButton("Connect", func() {
 		username := form.GetFormItem(0).(*tview.InputField).GetText()
-		sshCommand := selectedInstance.GetSSHCommand(username)
-
-		ui.ShowInfoDialog("SSH Command", sshCommand)
+		ipAddress := selectedIP
+		ui.pages.RemovePage("modal")
+		ui.launchSSHInTerminal(username, ipAddress)
 	})
 	form.AddButton("Cancel", func() {
 		ui.pages.RemovePage("modal")
@@ -796,6 +810,41 @@ func (ui *UI) handleConnectInstance() {
 		AddItem(nil, 0, 1, false)
 
 	ui.pages.AddPage("modal", flex, true, true)
+}
+
+func (ui *UI) buildIPOptions(instance *model.Instance) ([]string, []string) {
+	var options []string
+	var values []string
+	if instance.PublicIP != "" {
+		options = append(options, fmt.Sprintf("public (%s)", instance.PublicIP))
+		values = append(values, instance.PublicIP)
+	}
+	if instance.PrivateIP != "" {
+		options = append(options, fmt.Sprintf("private (%s)", instance.PrivateIP))
+		values = append(values, instance.PrivateIP)
+	}
+	return options, values
+}
+
+func (ui *UI) launchSSHInTerminal(username, ipAddress string) {
+	terminalCmd := ui.config.UI.Terminal
+	if terminalCmd == "" {
+		terminalCmd = "xterm -e"
+	}
+	terminalArgs := strings.Fields(terminalCmd)
+	if len(terminalArgs) == 0 {
+		ui.statusBar.SetError(fmt.Sprintf("Invalid terminal command: %s", terminalCmd))
+		return
+	}
+
+	sshCommand := fmt.Sprintf("%s@%s", username, ipAddress)
+	args := append(terminalArgs[1:], "ssh", sshCommand)
+	cmd := exec.Command(terminalArgs[0], args...)
+
+	if err := cmd.Start(); err != nil {
+		ui.statusBar.SetError(fmt.Sprintf("Failed to launch terminal: %v", err))
+		return
+	}
 }
 
 // handleViewLogs handles viewing the console output of the selected instance
