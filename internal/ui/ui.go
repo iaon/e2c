@@ -776,14 +776,14 @@ func (ui *UI) handleConnectInstance() {
 
 	form := tview.NewForm()
 	form.AddInputField("Username:", defaultUser, 20, nil, nil)
-	ipOptions, ipValues := ui.buildIPOptions(selectedInstance)
+	ipOptions, ipValues, defaultIPIndex := ui.buildIPOptions(selectedInstance, ui.config.UI.ConnectPreferPrivate)
 	if len(ipValues) == 0 {
 		ui.statusBar.SetError("No IP address available for SSH connection")
 		return
 	}
 
-	selectedIP := ipValues[0]
-	form.AddDropDown("IP Address:", ipOptions, 0, func(option string, optionIndex int) {
+	selectedIP := ipValues[defaultIPIndex]
+	form.AddDropDown("IP Address:", ipOptions, defaultIPIndex, func(option string, optionIndex int) {
 		if optionIndex >= 0 && optionIndex < len(ipValues) {
 			selectedIP = ipValues[optionIndex]
 		}
@@ -799,6 +799,7 @@ func (ui *UI) handleConnectInstance() {
 	})
 
 	form.SetBorder(true).SetTitle("SSH Connection")
+	form.SetFocus(form.GetFormItemCount())
 
 	// Center the form
 	flex := tview.NewFlex().
@@ -812,9 +813,11 @@ func (ui *UI) handleConnectInstance() {
 	ui.pages.AddPage("modal", flex, true, true)
 }
 
-func (ui *UI) buildIPOptions(instance *model.Instance) ([]string, []string) {
-	var options []string
-	var values []string
+func (ui *UI) buildIPOptions(instance *model.Instance, preferPrivate bool) ([]string, []string, int) {
+	var (
+		options []string
+		values  []string
+	)
 	if instance.PublicIP != "" {
 		options = append(options, fmt.Sprintf("public (%s)", instance.PublicIP))
 		values = append(values, instance.PublicIP)
@@ -823,7 +826,13 @@ func (ui *UI) buildIPOptions(instance *model.Instance) ([]string, []string) {
 		options = append(options, fmt.Sprintf("private (%s)", instance.PrivateIP))
 		values = append(values, instance.PrivateIP)
 	}
-	return options, values
+	defaultIndex := 0
+	if preferPrivate && instance.PrivateIP != "" {
+		if instance.PublicIP != "" {
+			defaultIndex = 1
+		}
+	}
+	return options, values, defaultIndex
 }
 
 func (ui *UI) launchSSHInTerminal(username, ipAddress string) {
