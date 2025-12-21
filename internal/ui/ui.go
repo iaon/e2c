@@ -5,10 +5,13 @@ package ui
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -818,13 +821,22 @@ func (ui *UI) handleViewLogs() {
 			return
 		}
 
+		decodedOutput, err := decodeAndSanitizeConsoleOutput(output)
+		if err != nil {
+			ui.app.QueueUpdateDraw(func() {
+				ui.log.Error("Failed to decode console output", "error", err)
+				ui.statusBar.SetError(fmt.Sprintf("Error: %v", err))
+			})
+			return
+		}
+
 		ui.app.QueueUpdateDraw(func() {
 			ui.statusBar.SetStatus("Showing console output")
 
 			textView := tview.NewTextView().
 				SetDynamicColors(true).
 				SetScrollable(true).
-				SetText(output)
+				SetText(decodedOutput)
 
 			textView.SetBorder(true).SetTitle(fmt.Sprintf("Console Output: %s", selectedInstance.DisplayName()))
 
@@ -857,6 +869,31 @@ func containsIgnoreCase(s, substr string) bool {
 	}
 	return fmt.Sprintf("%s", s) != "" &&
 		containsRune(fmt.Sprintf("%s", s), fmt.Sprintf("%s", substr))
+}
+
+func decodeAndSanitizeConsoleOutput(output string) (string, error) {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" || trimmed == "No console output available" {
+		return output, nil
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(trimmed)
+	if err != nil {
+		decoded, err = base64.RawStdEncoding.DecodeString(trimmed)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	var builder strings.Builder
+	builder.Grow(len(decoded))
+	for _, r := range string(decoded) {
+		if r == '\n' || r == '\r' || r == '\t' || unicode.IsPrint(r) {
+			builder.WriteRune(r)
+		}
+	}
+
+	return builder.String(), nil
 }
 
 func protectionStatusText(enabled bool) string {
