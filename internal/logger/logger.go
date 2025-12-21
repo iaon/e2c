@@ -53,7 +53,7 @@ type Config struct {
 	Level Level
 	// Format is the output format (text, json)
 	Format Format
-	// Output is the destination for logs (defaults to stdout)
+	// Output is the destination for logs (defaults to stderr)
 	Output *os.File
 	// AddSource adds the source file and line number to log messages
 	AddSource bool
@@ -62,9 +62,10 @@ type Config struct {
 // NewConfig creates a default logger configuration
 func NewConfig() *Config {
 	return &Config{
-		Level:     InfoLevel,
-		Format:    TextFormat,
-		Output:    os.Stdout,
+		Level:  InfoLevel,
+		Format: TextFormat,
+		// Use stderr by default to avoid interfering with stdout-based UIs
+		Output:    os.Stderr,
 		AddSource: true,
 	}
 }
