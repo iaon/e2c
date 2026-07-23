@@ -13,8 +13,8 @@ aws:
   profile: ""
 
 ui:
-  expert_mode: false
   # Expert mode enables termination and stop protection options
+  expert_mode: false
 
   # UI theme (dark or light)
   theme: dark
